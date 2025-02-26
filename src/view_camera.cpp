@@ -3,8 +3,9 @@
 // Includes common necessary includes for development using depthai library
 #include "depthai/depthai.hpp"
 
-int main() {
-  using namespace std;
+using namespace std;
+
+auto main() -> int {
   // Create pipeline
   dai::Pipeline pipeline;
 

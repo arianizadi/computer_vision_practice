@@ -19,7 +19,6 @@ auto main() -> int {
   // Detect keypoints and compute descriptors
   std::vector< cv::KeyPoint > keypoints1, keypoints2;
   cv::Mat descriptors1, descriptors2;
-
   orb->detectAndCompute(img1, cv::noArray(), keypoints1, descriptors1);
   orb->detectAndCompute(img2, cv::noArray(), keypoints2, descriptors2);
 
@@ -31,15 +30,12 @@ auto main() -> int {
   // Find good matches using distance threshold
   double max_dist = 0;
   double min_dist = 100;
-
   for(int i = 0; i < descriptors1.rows; i++) {
     double dist = matches[i].distance;
-    if(dist < min_dist) {
+    if(dist < min_dist)
       min_dist = dist;
-    }
-    if(dist > max_dist) {
+    if(dist > max_dist)
       max_dist = dist;
-    }
   }
 
   std::vector< cv::DMatch > good_matches;
@@ -59,7 +55,7 @@ auto main() -> int {
   // Find homography matrix
   cv::Mat H = cv::findHomography(points1, points2, cv::RANSAC);
 
-  // Draw matches
+  // Create base image for matches
   cv::Mat img_matches;
   cv::drawMatches(img1,
                   keypoints1,
@@ -72,18 +68,53 @@ auto main() -> int {
                   std::vector< char >(),
                   cv::DrawMatchesFlags::NOT_DRAW_SINGLE_POINTS);
 
-  // Draw lines between matched points
-  for(auto &good_matche : good_matches) {
-    cv::Point2f point1 = keypoints1[good_matche.queryIdx].pt;
-    cv::Point2f point2 = keypoints2[good_matche.trainIdx].pt;
-    point2.x
-        += static_cast< float >(img1.cols); // Adjust for side-by-side display
-    cv::line(img_matches, point1, point2, cv::Scalar(0, 255, 0), 1);
-  }
+  int current_match = 0;
+  cv::namedWindow("Matches", cv::WINDOW_NORMAL);
 
-  // Show results
-  cv::imshow("Matches", img_matches);
-  cv::waitKey(0);
+  while(true) {
+    // Create a copy of the base image for drawing current match
+    cv::Mat current_display = img_matches.clone();
+
+    if(current_match < good_matches.size()) {
+      cv::Point2f point1 = keypoints1[good_matches[current_match].queryIdx].pt;
+      cv::Point2f point2 = keypoints2[good_matches[current_match].trainIdx].pt;
+      point2.x += static_cast< float >(img1.cols);
+
+      // Use a fixed bright color for better visibility
+      cv::Scalar color(0, 255, 255); // Yellow color
+
+      // Draw much thicker line for selected match
+      cv::line(current_display, point1, point2, color, 8);
+
+      // Draw larger circles at keypoints
+      cv::circle(current_display, point1, 15, color, -1);
+      cv::circle(current_display, point2, 15, color, -1);
+
+      // Display match number
+      std::string match_text = "Match " + std::to_string(current_match + 1)
+                               + " of " + std::to_string(good_matches.size());
+      cv::putText(current_display,
+                  match_text,
+                  cv::Point(20, 40),
+                  cv::FONT_HERSHEY_SIMPLEX,
+                  1.0,
+                  cv::Scalar(0, 255, 0),
+                  2);
+    }
+
+    cv::imshow("Matches", current_display);
+
+    // Wait for keypress
+    char key = cv::waitKey(0);
+    if(key == 27) { // ESC key to exit
+      break;
+    } else if(key == 'n' || key == 'N') { // Next match
+      current_match = (current_match + 1) % good_matches.size();
+    } else if(key == 'b' || key == 'B') { // Previous match
+      current_match
+          = (current_match - 1 + good_matches.size()) % good_matches.size();
+    }
+  }
 
   return 0;
 }
