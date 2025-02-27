@@ -4,117 +4,115 @@
 #include <opencv2/opencv.hpp>
 
 auto main() -> int {
-  // Load the images
-  cv::Mat img1 = cv::imread("image1.jpeg");
-  cv::Mat img2 = cv::imread("image2.jpeg");
-
+  // 1. Load images in color
+  cv::Mat img1 = cv::imread("image1.jpeg", cv::IMREAD_COLOR); // Template image
+  cv::Mat img2 = cv::imread("image2.jpeg", cv::IMREAD_COLOR); // Scene image
   if(img1.empty() || img2.empty()) {
-    std::cout << "Error: Could not load one or both images" << std::endl;
+    std::cerr << "Error loading images.\n";
     return -1;
   }
+  std::cout << "Images loaded.\n";
 
-  // Initialize ORB detector
-  cv::Ptr< cv::ORB > orb = cv::ORB::create();
+  // Convert to grayscale for feature detection
+  cv::Mat img1Gray, img2Gray;
+  cv::cvtColor(img1, img1Gray, cv::COLOR_BGR2GRAY);
+  cv::cvtColor(img2, img2Gray, cv::COLOR_BGR2GRAY);
 
-  // Detect keypoints and compute descriptors
-  std::vector< cv::KeyPoint > keypoints1, keypoints2;
-  cv::Mat descriptors1, descriptors2;
-  orb->detectAndCompute(img1, cv::noArray(), keypoints1, descriptors1);
-  orb->detectAndCompute(img2, cv::noArray(), keypoints2, descriptors2);
+  // 2. Detect keypoints and compute descriptors using ORB
+  cv::Ptr< cv::ORB > detector = cv::ORB::create();
+  std::vector< cv::KeyPoint > kp1, kp2;
+  cv::Mat desc1, desc2;
+  detector->detectAndCompute(img1Gray, cv::noArray(), kp1, desc1);
+  detector->detectAndCompute(img2Gray, cv::noArray(), kp2, desc2);
+  std::cout << "Keypoints detected: img1=" << kp1.size()
+            << ", img2=" << kp2.size() << "\n";
 
-  // Match features using BFMatcher
-  cv::BFMatcher matcher(cv::NORM_HAMMING);
+  // 3. Match descriptors using BFMatcher with cross-check
+  cv::BFMatcher matcher(cv::NORM_HAMMING, true);
   std::vector< cv::DMatch > matches;
-  matcher.match(descriptors1, descriptors2, matches);
+  matcher.match(desc1, desc2, matches);
+  std::cout << "Matches found: " << matches.size() << "\n";
 
-  // Find good matches using distance threshold
+  // 4. Filter good matches based on distance
   double max_dist = 0;
-  double min_dist = 100;
-  for(int i = 0; i < descriptors1.rows; i++) {
-    double dist = matches[i].distance;
-    if(dist < min_dist)
-      min_dist = dist;
-    if(dist > max_dist)
-      max_dist = dist;
-  }
-
-  std::vector< cv::DMatch > good_matches;
-  for(int i = 0; i < descriptors1.rows; i++) {
-    if(matches[i].distance <= std::max(2 * min_dist, 30.0)) {
-      good_matches.push_back(matches[i]);
+  for(const auto& m : matches) {
+    if(m.distance > max_dist) {
+      max_dist = m.distance;
     }
   }
+  std::vector< cv::DMatch > goodMatches;
+  for(const auto& m : matches) {
+    if(m.distance < 0.6 * max_dist) {
+      goodMatches.push_back(m);
+    }
+  }
+  std::cout << "Good matches filtered: " << goodMatches.size() << "\n";
 
-  // Extract location of good matches
-  std::vector< cv::Point2f > points1, points2;
-  for(size_t i = 0; i < good_matches.size(); i++) {
-    points1.push_back(keypoints1[good_matches[i].queryIdx].pt);
-    points2.push_back(keypoints2[good_matches[i].trainIdx].pt);
+  // 5. Extract location of good matches
+  std::vector< cv::Point2f > pts1, pts2;
+  for(const auto& m : goodMatches) {
+    pts1.push_back(kp1[m.queryIdx].pt);
+    pts2.push_back(kp2[m.trainIdx].pt);
   }
 
-  // Find homography matrix
-  cv::Mat H = cv::findHomography(points1, points2, cv::RANSAC);
+  // 6. Find homography
+  cv::Mat H = cv::findHomography(pts1, pts2, cv::RANSAC);
+  if(H.empty()) {
+    std::cerr << "Homography computation failed.\n";
+    return -1;
+  }
+  std::cout << "Homography matrix:\n" << H << "\n";
 
-  // Create base image for matches
-  cv::Mat img_matches;
+  // 7. Decompose homography to get rotation and translation
+  cv::Mat K = cv::Mat::eye(
+      3, 3, CV_64F); // Assuming camera intrinsic matrix is identity
+  std::vector< cv::Mat > rotations, translations, normals;
+  int solutions
+      = cv::decomposeHomographyMat(H, K, rotations, translations, normals);
+  std::cout << "Number of solutions: " << solutions << "\n";
+
+  // 8. Select the first solution (for simplicity)
+  cv::Mat R = rotations[0];
+  cv::Mat t = translations[0];
+  std::cout << "Rotation matrix:\n" << R << "\n";
+  std::cout << "Translation vector:\n" << t << "\n";
+
+  // 9. Draw bounding box around detected object in both images
+  std::vector< cv::Point2f > objCorners(4);
+  objCorners[0] = cv::Point2f(0, 0);
+  objCorners[1] = cv::Point2f(static_cast< float >(img1.cols), 0);
+  objCorners[2] = cv::Point2f(static_cast< float >(img1.cols),
+                              static_cast< float >(img1.rows));
+  objCorners[3] = cv::Point2f(0, static_cast< float >(img1.rows));
+
+  // Draw box in img1 (template)
+  cv::line(img1, objCorners[0], objCorners[1], cv::Scalar(0, 255, 0), 4);
+  cv::line(img1, objCorners[1], objCorners[2], cv::Scalar(0, 255, 0), 4);
+  cv::line(img1, objCorners[2], objCorners[3], cv::Scalar(0, 255, 0), 4);
+  cv::line(img1, objCorners[3], objCorners[0], cv::Scalar(0, 255, 0), 4);
+
+  // Draw transformed box in img2 (scene)
+  std::vector< cv::Point2f > sceneCorners(4);
+  cv::perspectiveTransform(objCorners, sceneCorners, H);
+  cv::line(img2, sceneCorners[0], sceneCorners[1], cv::Scalar(0, 255, 0), 4);
+  cv::line(img2, sceneCorners[1], sceneCorners[2], cv::Scalar(0, 255, 0), 4);
+  cv::line(img2, sceneCorners[2], sceneCorners[3], cv::Scalar(0, 255, 0), 4);
+  cv::line(img2, sceneCorners[3], sceneCorners[0], cv::Scalar(0, 255, 0), 4);
+
+  // 10. Display images with matches and bounding boxes
+  cv::Mat imgMatches;
   cv::drawMatches(img1,
-                  keypoints1,
+                  kp1,
                   img2,
-                  keypoints2,
-                  good_matches,
-                  img_matches,
+                  kp2,
+                  goodMatches,
+                  imgMatches,
                   cv::Scalar::all(-1),
                   cv::Scalar::all(-1),
                   std::vector< char >(),
                   cv::DrawMatchesFlags::NOT_DRAW_SINGLE_POINTS);
-
-  int current_match = 0;
-  cv::namedWindow("Matches", cv::WINDOW_NORMAL);
-
-  while(true) {
-    // Create a copy of the base image for drawing current match
-    cv::Mat current_display = img_matches.clone();
-
-    if(current_match < good_matches.size()) {
-      cv::Point2f point1 = keypoints1[good_matches[current_match].queryIdx].pt;
-      cv::Point2f point2 = keypoints2[good_matches[current_match].trainIdx].pt;
-      point2.x += static_cast< float >(img1.cols);
-
-      // Use a fixed bright color for better visibility
-      cv::Scalar color(0, 255, 255); // Yellow color
-
-      // Draw much thicker line for selected match
-      cv::line(current_display, point1, point2, color, 8);
-
-      // Draw larger circles at keypoints
-      cv::circle(current_display, point1, 15, color, -1);
-      cv::circle(current_display, point2, 15, color, -1);
-
-      // Display match number
-      std::string match_text = "Match " + std::to_string(current_match + 1)
-                               + " of " + std::to_string(good_matches.size());
-      cv::putText(current_display,
-                  match_text,
-                  cv::Point(20, 40),
-                  cv::FONT_HERSHEY_SIMPLEX,
-                  1.0,
-                  cv::Scalar(0, 255, 0),
-                  2);
-    }
-
-    cv::imshow("Matches", current_display);
-
-    // Wait for keypress
-    char key = cv::waitKey(0);
-    if(key == 27) { // ESC key to exit
-      break;
-    } else if(key == 'n' || key == 'N') { // Next match
-      current_match = (current_match + 1) % good_matches.size();
-    } else if(key == 'b' || key == 'B') { // Previous match
-      current_match
-          = (current_match - 1 + good_matches.size()) % good_matches.size();
-    }
-  }
+  cv::imshow("Good Matches & Object Detection", imgMatches);
+  cv::waitKey(0);
 
   return 0;
 }
